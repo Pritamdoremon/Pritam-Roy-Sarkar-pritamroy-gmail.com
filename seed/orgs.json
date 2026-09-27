@@ -1,0 +1,212 @@
+{
+  "_readme": [
+    "RemoteOps Q1 demo fixture. Loaded by `make seed` after db/schema.sql + db/reference.sql.",
+    "",
+    "Timestamps are RELATIVE offsets resolved against now() at load time, so the fixture never",
+    "goes stale and grants never silently expire. Formats: '-2h', '-30m', '+7d', 'now'.",
+    "",
+    "PASSWORDS: the 'seedPassword' field is plaintext on purpose. The loader MUST hash it on",
+    "insert; do not store this value in users.password_hash. One value for everyone so nobody",
+    "burns time on auth setup.",
+    "",
+    "HIDDEN TESTS MUST NOT READ THIS FILE. It is published, so any hidden test built on a",
+    "published id is special-casable. Hidden tests mint their own randomized orgs and tear them",
+    "down. This fixture exists for the candidate's manual exploration and for the live demo."
+  ],
+
+  "seedPassword": "demo1234",
+
+  "organizations": [
+    { "id": "org_acme",   "name": "Acme Robotics",     "theme": "cobalt", "maxSessionMinutes": 60 },
+    { "id": "org_globex", "name": "Globex Industries", "theme": "amber",  "maxSessionMinutes": 60 }
+  ],
+
+  "users": [
+    { "id": "usr_dana",          "email": "dana@example.test",   "name": "Dana Okafor" },
+    { "id": "usr_sam",           "email": "sam@example.test",    "name": "Sam Rivera" },
+    { "id": "usr_acme_owner",    "email": "owner@acme.test",     "name": "Acme Owner" },
+    { "id": "usr_acme_admin",    "email": "admin@acme.test",     "name": "Acme Admin" },
+    { "id": "usr_acme_viewer",   "email": "viewer@acme.test",    "name": "Acme Viewer" },
+    { "id": "usr_globex_owner",  "email": "owner@globex.test",   "name": "Globex Owner" }
+  ],
+
+  "_membershipsNote": [
+    "Dana and Sam belong to BOTH orgs with different roles. That is the demo: one login, two",
+    "organizations, visibly different views.",
+    "",
+    "  Dana: owner in Acme, viewer in Globex  -> the dramatic case",
+    "  Sam:  operator in Acme, auditor in Globex -> the INVERSION, and the better demo",
+    "",
+    "In Acme Sam can control devices but cannot read the audit log. In Globex she can read the",
+    "audit log but cannot control anything. One person, and the two locked items swap. This is",
+    "PERMISSIONS.md D2 made visible on a single screen: roles are bundles, not levels."
+  ],
+  "memberships": [
+    { "orgId": "org_acme",   "userId": "usr_dana",         "role": "owner",    "status": "active", "joinedAt": "-90d" },
+    { "orgId": "org_globex", "userId": "usr_dana",         "role": "viewer",   "status": "active", "joinedAt": "-60d" },
+    { "orgId": "org_acme",   "userId": "usr_sam",          "role": "operator", "status": "active", "joinedAt": "-80d" },
+    { "orgId": "org_globex", "userId": "usr_sam",          "role": "auditor",  "status": "active", "joinedAt": "-45d" },
+    { "orgId": "org_acme",   "userId": "usr_acme_owner",   "role": "owner",    "status": "active", "joinedAt": "-120d" },
+    { "orgId": "org_acme",   "userId": "usr_acme_admin",   "role": "admin",    "status": "active", "joinedAt": "-110d" },
+    { "orgId": "org_acme",   "userId": "usr_acme_viewer",  "role": "viewer",   "status": "active", "joinedAt": "-70d" },
+    { "orgId": "org_globex", "userId": "usr_globex_owner", "role": "owner",    "status": "active", "joinedAt": "-100d" }
+  ],
+
+  "devices": [
+    { "id": "dev_lab_mac_01",      "orgId": "org_acme",   "name": "lab-mac-01",      "kind": "macos",   "online": true  },
+    { "id": "dev_lab_win_01",      "orgId": "org_acme",   "name": "lab-win-01",      "kind": "windows", "online": true  },
+    { "id": "dev_build_server_01", "orgId": "org_acme",   "name": "build-server-01", "kind": "linux",   "online": false },
+    { "id": "dev_kiosk_lobby_01",  "orgId": "org_acme",   "name": "kiosk-lobby-01",  "kind": "linux",   "online": true  },
+    { "id": "dev_qa_android_01",   "orgId": "org_acme",   "name": "qa-android-01",   "kind": "android", "online": true  },
+    { "id": "dev_globex_desk_01",  "orgId": "org_globex", "name": "globex-desk-01",  "kind": "windows", "online": true  },
+    { "id": "dev_globex_kiosk_02", "orgId": "org_globex", "name": "globex-kiosk-02", "kind": "linux",   "online": true  }
+  ],
+
+  "_grantsNote": [
+    "Four grants, each seeded to demonstrate a different rule. Together they cover the whole",
+    "resolution algorithm, so a candidate can see every rule in the UI on first boot.",
+    "",
+    "  1. D3 + D6  grant WIDENS past the role, scoped to ONE device",
+    "  2. D1 + D4  explicit DENY narrows the role, scoped to one device",
+    "  3. D1       org-wide DENY beats the role baseline everywhere in the org",
+    "  4. D6       device-scoped grant: unlocked on exactly one row, locked on all the others"
+  ],
+  "grants": [
+    {
+      "id": "grt_viewer_start_session",
+      "orgId": "org_acme",
+      "userId": "usr_acme_viewer",
+      "deviceId": "dev_lab_mac_01",
+      "effect": "allow",
+      "permissions": ["session:start", "device:view"],
+      "createdBy": "usr_acme_owner",
+      "_demonstrates": "D3 + D6 — a viewer cannot start sessions by role, but can on THIS device only. Because mode=view needs session:start + device:view, they get a working View button on lab-mac-01 and nowhere else."
+    },
+    {
+      "id": "grt_viewer_deny_kiosk",
+      "orgId": "org_acme",
+      "userId": "usr_acme_viewer",
+      "deviceId": "dev_kiosk_lobby_01",
+      "effect": "deny",
+      "permissions": ["device:view"],
+      "createdBy": "usr_acme_owner",
+      "_demonstrates": "D1 + D4 — the role grants device:view, this deny removes it. Per PERMISSIONS.md §2, denying device:view removes the row from the list entirely, so kiosk-lobby-01 does not appear for this user at all."
+    },
+    {
+      "id": "grt_sam_deny_terminal_orgwide",
+      "orgId": "org_acme",
+      "userId": "usr_sam",
+      "deviceId": null,
+      "effect": "deny",
+      "permissions": ["device:terminal"],
+      "createdBy": "usr_acme_owner",
+      "_demonstrates": "D1 — operator's baseline includes device:terminal; this org-wide deny removes it everywhere in Acme. Sam can still control devices; she just cannot open a shell. Vector 7 in PERMISSIONS.md §11: an org-wide deny is NOT carved out by any device-scoped allow."
+    },
+    {
+      "id": "grt_dana_control_one_device",
+      "orgId": "org_globex",
+      "userId": "usr_dana",
+      "deviceId": "dev_globex_desk_01",
+      "effect": "allow",
+      "permissions": ["device:control"],
+      "createdBy": "usr_globex_owner",
+      "_demonstrates": "D6 — Dana is a viewer in Globex, so Control is locked on every row EXCEPT this one. The clearest single demonstration that authorization is device-scoped rather than org-level."
+    }
+  ],
+
+  "sessions": [
+    {
+      "id": "ses_live_build_server",
+      "orgId": "org_acme",
+      "userId": "usr_sam",
+      "deviceId": "dev_build_server_01",
+      "mode": "control",
+      "state": "active",
+      "startedAt": "-25m",
+      "expiresAt": "+35m",
+      "authorizedBy": {
+        "role": "operator",
+        "grantIds": [],
+        "snapshotAt": "-25m"
+      },
+      "_demonstrates": "PERMISSIONS.md §7.1 — authorized_by is a snapshot. If Sam's grants change now, this session keeps running; only the next one is blocked. Note terminal is denied org-wide for Sam, but this is a control session, so it is unaffected."
+    },
+    {
+      "id": "ses_ended_view",
+      "orgId": "org_acme",
+      "userId": "usr_acme_viewer",
+      "deviceId": "dev_lab_mac_01",
+      "mode": "view",
+      "state": "ended",
+      "startedAt": "-3h",
+      "expiresAt": "-2h",
+      "endedAt": "-2h55m",
+      "endReason": "user_stopped",
+      "authorizedBy": {
+        "role": "viewer",
+        "grantIds": ["grt_viewer_start_session"],
+        "snapshotAt": "-3h"
+      },
+      "_demonstrates": "A grant-authorized session in the history, so the session list and the audit log are not empty on first boot."
+    }
+  ],
+
+  "auditEvents": [
+    {
+      "id": "aud_001",
+      "orgId": "org_acme",
+      "actorId": "usr_acme_owner",
+      "action": "grant.create",
+      "targetType": "grant",
+      "targetId": "grt_sam_deny_terminal_orgwide",
+      "result": "allow",
+      "reasonCode": null,
+      "at": "-20h"
+    },
+    {
+      "id": "aud_002",
+      "orgId": "org_acme",
+      "actorId": "usr_acme_viewer",
+      "action": "session.start",
+      "targetType": "device",
+      "targetId": "dev_lab_mac_01",
+      "result": "allow",
+      "reasonCode": null,
+      "at": "-3h"
+    },
+    {
+      "id": "aud_003",
+      "orgId": "org_acme",
+      "actorId": "usr_acme_viewer",
+      "action": "session.start",
+      "targetType": "device",
+      "targetId": "dev_qa_android_01",
+      "result": "deny",
+      "reasonCode": "missing_permission",
+      "at": "-2h30m",
+      "_demonstrates": "Denied attempts are audited too (invariant 10). Candidates routinely only log successes."
+    },
+    {
+      "id": "aud_004",
+      "orgId": "org_acme",
+      "actorId": "usr_acme_admin",
+      "action": "device.update",
+      "targetType": "device",
+      "targetId": "dev_kiosk_lobby_01",
+      "result": "allow",
+      "reasonCode": null,
+      "at": "-5h"
+    },
+    {
+      "id": "aud_005",
+      "orgId": "org_globex",
+      "actorId": "usr_dana",
+      "action": "device.view",
+      "targetType": "device",
+      "targetId": "dev_globex_desk_01",
+      "result": "allow",
+      "reasonCode": null,
+      "at": "-40m"
+    }
+  ]
+}
