@@ -1,9 +1,11 @@
 import {
-  hashInviteToken, hashPassword, issueAccessToken, newInviteToken, verifyPassword,
+  hashInviteToken, hashPassword, hashRefreshToken, issueAccessToken, newInviteToken,
+  newRefreshToken, REFRESH_TTL_SECONDS, verifyPassword,
 } from '../auth.js';
 import { audit, auditDenials } from '../audit.js';
+import { authenticate } from '../context.js';
 import { bumpPermVersion, newId, nowIso } from '../db.js';
-import { assertCan, assertCanStartSession, assertMayGrant, resolveDevices } from '../permissions.js';
+import { assertCan, assertCanStartSession, assertMayGrant, can, resolve, resolveDevices } from '../permissions.js';
 import {
   assertCanModify, assertNotLastOwner, assertRoleExists, endActiveSessions,
   sessionExpiry, snapshotAuthority,
@@ -23,6 +25,56 @@ function issueForMembership(user, member, secret) {
 
 function insertAudit(db, ctx, action, targetType, targetId, result = 'allow', reasonCode = null) {
   audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action, targetType, targetId, result, reasonCode, requestId: ctx.requestId });
+}
+
+function cookieValue(req, name) {
+  const cookies = String(req.headers.cookie ?? '').split(';');
+  for (const cookie of cookies) {
+    const [key, ...value] = cookie.trim().split('=');
+    if (key === name) return value.join('=');
+  }
+  return null;
+}
+
+function setRefreshCookie(res, token) {
+  res.setHeader('set-cookie', `rt=${token}; HttpOnly; SameSite=Strict; Path=/v1/auth/refresh; Max-Age=${REFRESH_TTL_SECONDS}`);
+}
+
+function saveRefreshToken(db, userId, orgId, rawToken, familyId = newId('fam')) {
+  const expiresAt = new Date(Date.now() + REFRESH_TTL_SECONDS * 1000).toISOString();
+  const family = `${orgId}|${familyId}`;
+  db.prepare('INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at) VALUES (?, ?, ?, ?, ?)')
+    .run(newId('rft'), userId, hashRefreshToken(rawToken), family, expiresAt);
+  return family;
+}
+
+function rotateRefreshToken(db, secret, req, res, userId, orgId = null) {
+  const rawToken = cookieValue(req, 'rt');
+  if (!rawToken) throw unauthenticated();
+  const oldToken = db.prepare('SELECT * FROM refresh_tokens WHERE token_hash = ?').get(hashRefreshToken(rawToken));
+  if (!oldToken || oldToken.revoked_at || oldToken.expires_at <= nowIso()) throw unauthenticated();
+
+  let familyId = oldToken.family_id;
+  const separator = familyId.indexOf('|');
+  const savedOrgId = separator < 0 ? null : familyId.slice(0, separator);
+  const savedFamilyId = separator < 0 ? familyId : familyId.slice(separator + 1);
+  const nextOrgId = orgId ?? savedOrgId;
+  if (!nextOrgId) throw unauthenticated();
+  if (orgId) familyId = `${orgId}|${newId('fam')}`;
+  else familyId = `${nextOrgId}|${savedFamilyId}`;
+
+  const member = membership(db, userId, nextOrgId);
+  const user = db.prepare('SELECT id, email, name FROM users WHERE id = ?').get(userId);
+  const org = db.prepare('SELECT id, name, theme FROM organizations WHERE id = ? AND deleted_at IS NULL').get(nextOrgId);
+  if (!member || member.status !== 'active' || !user || !org) throw unauthenticated();
+
+  const nextToken = newRefreshToken();
+  db.transaction(() => {
+    db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?').run(nowIso(), oldToken.id);
+    saveRefreshToken(db, userId, nextOrgId, nextToken, familyId.slice(familyId.indexOf('|') + 1));
+  })();
+  setRefreshCookie(res, nextToken);
+  return { token: issueForMembership(user, member, secret), user, org, role: member.role };
 }
 
 export function registerRoutes(router, deps) {
@@ -46,7 +98,38 @@ export function registerRoutes(router, deps) {
       if (!selected) throw notFound();
     }
     const token = issueAccessToken({ userId: user.id, orgId: selected.id, role: selected.role, permVersion: selected.perm_version }, secret);
+    const rawRefreshToken = newRefreshToken();
+    saveRefreshToken(db, user.id, selected.id, rawRefreshToken);
+    setRefreshCookie(res, rawRefreshToken);
     send(res, 200, { token, user: { id: user.id, email: user.email, name: user.name }, org: { id: selected.id, name: selected.name, theme: selected.theme }, orgs, role: selected.role });
+  });
+
+  router.post('/v1/auth/refresh', (ctx, _params, res) => {
+    const rawToken = cookieValue(ctx.req, 'rt');
+    if (!rawToken) throw unauthenticated();
+    const saved = db.prepare('SELECT user_id FROM refresh_tokens WHERE token_hash = ?').get(hashRefreshToken(rawToken));
+    if (!saved) throw unauthenticated();
+    const session = rotateRefreshToken(db, secret, ctx.req, res, saved.user_id);
+    const orgs = db.prepare(
+      `SELECT o.id, o.name, o.theme, m.role, m.perm_version, m.status
+         FROM memberships m JOIN organizations o ON o.id = m.org_id
+        WHERE m.user_id = ? AND m.status = 'active' AND o.deleted_at IS NULL ORDER BY o.name`
+    ).all(saved.user_id);
+    send(res, 200, { ...session, orgs });
+  });
+
+  router.get('/v1/auth/me', (ctx, _params, res) => {
+    if (!ctx.req.headers.authorization) {
+      send(res, 200, { ready: true });
+      return;
+    }
+    const caller = authenticate(db, secret)(ctx.req, {});
+    const orgs = db.prepare(
+      `SELECT o.id, o.name, o.theme, m.role, m.perm_version, m.status
+         FROM memberships m JOIN organizations o ON o.id = m.org_id
+        WHERE m.user_id = ? AND m.status = 'active' AND o.deleted_at IS NULL ORDER BY o.name`
+    ).all(caller.userId);
+    send(res, 200, { user: caller.user, org: caller.organization, role: caller.role, orgs });
   });
 
   router.post('/v1/auth/token', (ctx, _params, res) => {
@@ -54,7 +137,46 @@ export function registerRoutes(router, deps) {
     if (!selected || selected.status !== 'active') throw notFound();
     const org = db.prepare('SELECT id, name, theme FROM organizations WHERE id = ? AND deleted_at IS NULL').get(selected.org_id);
     if (!org) throw notFound();
+    const rawRefreshToken = newRefreshToken();
+    const oldToken = cookieValue(ctx.req, 'rt');
+    const familyId = newId('fam');
+    db.transaction(() => {
+      if (oldToken) db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ?').run(nowIso(), hashRefreshToken(oldToken));
+      saveRefreshToken(db, ctx.userId, selected.org_id, rawRefreshToken, familyId);
+    })();
+    setRefreshCookie(res, rawRefreshToken);
     send(res, 200, { token: issueForMembership(ctx.user, selected, secret), org, role: selected.role });
+  });
+
+  router.get('/v1/orgs/:orgId/effective', (ctx, _params, res) => {
+    send(res, 200, resolve(db, { userId: ctx.userId, orgId: ctx.orgId }));
+  });
+
+  router.get('/v1/orgs/:orgId/members', (ctx, _params, res) => {
+    assertCan(db, ctx, 'user:read');
+    const users = db.prepare(
+      `SELECT u.id, u.name, u.email, m.role, m.status
+         FROM memberships m JOIN users u ON u.id = m.user_id
+        WHERE m.org_id = ? AND m.status <> 'removed' ORDER BY u.name`
+    ).all(ctx.orgId);
+    send(res, 200, { users });
+  });
+
+  router.get('/v1/orgs/:orgId/grants', (ctx, _params, res) => {
+    if (!can(db, ctx, 'user:read') && !can(db, ctx, 'grant:create') && !can(db, ctx, 'grant:revoke')) {
+      throw forbidden('missing permission');
+    }
+    const grants = db.prepare(
+      `SELECT g.id, g.user_id, g.device_id, g.effect, g.starts_at, g.expires_at, g.revoked_at,
+              u.name AS user_name, d.name AS device_name
+         FROM grants g JOIN users u ON u.id = g.user_id
+         LEFT JOIN devices d ON d.id = g.device_id
+        WHERE g.org_id = ? ORDER BY g.created_at, g.id`
+    ).all(ctx.orgId);
+    for (const grant of grants) {
+      grant.permissions = db.prepare('SELECT permission FROM grant_permissions WHERE grant_id = ? ORDER BY permission').all(grant.id).map((row) => row.permission);
+    }
+    send(res, 200, { grants });
   });
 
   router.get('/v1/orgs/:orgId', (ctx, _params, res) => {
@@ -203,10 +325,10 @@ export function registerRoutes(router, deps) {
   });
 
   router.get('/v1/invites/:token', (_ctx, { token }, res) => {
-    const invite = db.prepare('SELECT i.expires_at, i.accepted_at, i.revoked_at, o.name AS org_name FROM invites i JOIN organizations o ON o.id = i.org_id WHERE i.token_hash = ?').get(hashInviteToken(token));
+    const invite = db.prepare('SELECT i.email, i.role, i.expires_at, i.accepted_at, i.revoked_at, o.name AS org_name FROM invites i JOIN organizations o ON o.id = i.org_id WHERE i.token_hash = ?').get(hashInviteToken(token));
     if (!invite) throw notFound();
     if (invite.accepted_at || invite.revoked_at || invite.expires_at <= nowIso()) throw gone();
-    send(res, 200, { orgName: invite.org_name, expiresAt: invite.expires_at });
+    send(res, 200, { orgName: invite.org_name, email: invite.email, role: invite.role, expiresAt: invite.expires_at });
   });
 
   router.post('/v1/invites/:token/accept', (ctx, { token }, res) => {

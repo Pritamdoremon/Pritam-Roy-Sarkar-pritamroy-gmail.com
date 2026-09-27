@@ -19,7 +19,7 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
   webServer: {
-    command: 'node scripts/load-db.js && node server/index.js',
+    command: 'npm run build && node scripts/load-db.js && node server/index.js',
     url: `http://localhost:${PORT}/v1/auth/me`,
     reuseExistingServer: false,
     timeout: 30_000,

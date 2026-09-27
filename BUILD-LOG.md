@@ -89,6 +89,14 @@ _What did you decide counts as an auditable event, and what pushed you to that l
 
 _Where did the server's answer and your instinct disagree about what should be on screen?_
 
+2026-09-27 (Task 5 — console): Expected the Playwright UI contract to exercise the new console.
+Observed: the first test, “the shell carries the active org identity,” could not launch Chromium:
+`browserType.launch: Executable doesn't exist at C:\Users\prita\AppData\Local\ms-playwright\chromium_headless_shell-1243\chrome-headless-shell-win64\chrome-headless-shell.exe`.
+The observed suite result was 25 failed before app assertions. Changed: added the React console,
+permission-based views, organization switching and refresh-cookie flow, plus the minimal API
+support and Playwright production build setup. `npx playwright test`: 25 failed at browser launch;
+the UI assertions did not run.
+
 ## Phase 8 — hardening
 
 _What did you measure, what did you fix, and what did you deliberately leave alone? Anything you
