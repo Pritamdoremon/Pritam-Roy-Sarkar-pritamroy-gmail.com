@@ -45,6 +45,20 @@ does not exercise stale-version comparison; that remains the responsibility of `
 _This is where most people's first model is wrong. Write down the model you started with, the
 observation that broke it, and the model you moved to. Be specific about the observation._
 
+2026-09-27 (Task 2 — caller authentication): Expected authentication/context checks to fail
+while `authenticate()` was still a stub. Observed: the focused context smoke test covered valid
+context, missing token, cross-org `404`, suspended membership, and stale permission version.
+Changed: implemented `authenticate()` with token verification, current user and membership
+lookups, organization isolation, suspended-member rejection, and stale-version validation.
+Test: focused context smoke check — 5 passed, 0 failed. `node scripts/check-api.js` did not
+reach API assertions because `scripts/load-db.js` exited with status 1.
+
+2026-09-27: Expected the documented role list to be insufficient for the permission catalogue.
+The personalization check confirmed this with role `duty_manager` and permission `session:record`.
+Loaded permissions, memberships, baselines, and active grants from the database, and resolved
+device results before building the organization-level union. `check-permissions.js`: 35 passed,
+0 failed; `check-personalisation.js`: 18 passed, 0 failed.
+
 ## Phase 3 — orgs, members, invites
 
 _Anything you had to work out that no document states. Invite lifecycle states are a common
