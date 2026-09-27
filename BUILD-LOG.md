@@ -64,6 +64,13 @@ device results before building the organization-level union. `check-permissions.
 _Anything you had to work out that no document states. Invite lifecycle states are a common
 source of this._
 
+2026-09-27 (Task 4 — API integration): Expected `check-api.js` to expose the missing route
+behavior. Observed: `server/routes/index.js` registered none, and the first check stopped before
+API assertions because `scripts/load-db.js` formed an invalid Windows path from `URL.pathname`.
+Changed: converted script URLs with `fileURLToPath`, registered the API handlers, and connected
+them to context, permissions, lifecycle, and audit helpers. `node scripts/check-api.js`: 66
+passed, 0 failed.
+
 ## Phase 4 — devices and grants
 
 _What happens at the boundary where two grants disagree, or where a grant's scope and the
