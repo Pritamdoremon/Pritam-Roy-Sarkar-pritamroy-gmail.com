@@ -16,14 +16,46 @@
 // authenticate(db, secret) returns (req, params) => caller, where caller carries at
 // least { userId, orgId, role, membership, claims }.
 
-const todo = () =>
-  Object.assign(
-    new Error('TODO: server/context.js — authenticate() is yours to write (BRIEF.md §3).'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+import { assertFresh, verifyAccessToken } from './auth.js';
+import { notFound, unauthenticated } from './http.js';
 
 export function authenticate(db, secret) {
   return function buildContext(req, params) {
-    throw todo();
+    const authorization = req.headers.authorization ?? '';
+    const bearer = /^Bearer\s+(.+)$/i.exec(authorization);
+    if (!bearer) throw unauthenticated();
+
+    const claims = verifyAccessToken(bearer[1], secret);
+    if (typeof claims.sub !== 'string' || typeof claims.org !== 'string') {
+      throw unauthenticated();
+    }
+
+    const requestedOrgId = params?.orgId ?? params?.org;
+    if (requestedOrgId && requestedOrgId !== claims.org) throw notFound();
+
+    const user = db.prepare('SELECT id, email, name FROM users WHERE id = ?').get(claims.sub);
+    if (!user) throw unauthenticated();
+
+    const organization = db.prepare(
+      'SELECT id, name, theme FROM organizations WHERE id = ?'
+    ).get(claims.org);
+    if (!organization) throw unauthenticated();
+
+    const membership = db.prepare(
+      'SELECT * FROM memberships WHERE user_id = ? AND org_id = ?'
+    ).get(user.id, organization.id);
+    if (!membership || membership.status !== 'active') throw unauthenticated();
+
+    assertFresh(claims, membership);
+
+    return {
+      userId: user.id,
+      orgId: organization.id,
+      role: membership.role,
+      user,
+      organization,
+      membership,
+      claims,
+    };
   };
 }
